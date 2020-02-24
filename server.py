@@ -1,18 +1,14 @@
-from player import Player 
+
 import pickle
 from socket import socket, error, AF_INET, SOCK_STREAM
 from  _thread import *
-import sys
-import os
-import time
 
-# socket allows connections to come into the server on a given port
-# the server variable will be an ip address 
+from game import Game
+
 server = "10.0.18.251"
 port = 5555
 max_clients_at_once = 2
 
-# ipv4, type of socket, sockstream is how the server string comes in?
 socket = socket(AF_INET, SOCK_STREAM)
 
 try: 
@@ -23,40 +19,48 @@ except error as e:
 print("Waiting for connection, server started")
 socket.listen(max_clients_at_once)
 
-players = [
-    Player((0, 0), 50, 50, (255, 0, 0)),
-    Player((100, 100), 50, 50, (180, 140, 15))
-]
+connected = set()
+games = {}
+id_count = 0
 
-def client_thread(connection, _current_player):
-    player_index = 0 if _current_player > 0 else 1
-    connection.send(pickle.dumps(players[player_index]))
-    msg = ""
-    connectedToClient = True
-    while connectedToClient:
-        print()
-        # IF YOU GET ANY ERRORS LIKE 'thing was truanced in size' 
-        #   or whatever, just increase this number
-        player = pickle.loads(connection.recv(2048))
-        players[player_index] = player
+def client_thread(connection, player, game_id):
+    global id_count
+    connection.send(str.encode(str(player)))
+    reply = ""
+    while True:
+        try:
+            if not game_id in games:
+                break
+            game = games[game_id]
+            data = connection.recv(4096).decode()
+            if not data:
+                break
+            if data == "reset":
+                game.reset_did_go()
+            elif data != "get":
+                game.play(player, data)
 
-        if not player:
-            print("Player was not received")
-            connectedToClient = False
-            break 
+            reply = game
+            connection.sendall(pickle.dumps(reply))
+        except:
+            break
 
-        if player_index == 0:
-            msg = players[1]
-        else:
-            msg = players[0]
-
-        print("Server received: ", player)
-        print("Server responded with: ", msg)
-        # encodes string into a bytes object, security thing
-        connection.sendall(pickle.dumps(msg))
     print("Lost connection")
-    print("________________________________")
+    try:
+        if games[game_id]:
+            del games[game_id]
+        print("Closing game", game_id)
+    except:
+        raise Exception("unable to delete game")
+    id_count -= 1
     connection.close()
+
+# def handle_move(game, player, data):
+#     if data == "reset":
+#         game.reset()
+#     elif data != "get":
+#         game.play(player, data)
+#     return game
 
 def extract_meta_info_and_log(address):
     local_ip, port = extract_ip_and_port_as_string(address)
@@ -64,11 +68,20 @@ def extract_meta_info_and_log(address):
 
 def extract_ip_and_port_as_string(address):
     return address[0], str(address[1])
-
-current_player = 1
+ 
 while True:
     connection, address = socket.accept()
     extract_meta_info_and_log(address)
-    start_new_thread(client_thread, (connection, current_player))
-    current_player *= -1
+
+    id_count += 1
+    player = 0 
+    game_id = (id_count - 1) // 2
+    if id_count % 2 == 1:
+        games[game_id] = Game(game_id)
+        print("Creating a new game.")
+    else:
+        games[game_id].ready = True
+        player = 1
+    start_new_thread(client_thread, (connection, player, game_id))
+
 socket.close()
